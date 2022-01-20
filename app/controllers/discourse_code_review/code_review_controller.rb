@@ -39,37 +39,53 @@ module DiscourseCodeReview
       end
       Rails.logger.warn("repo_name is blank. #{params.to_json}") if repo_name.blank?
 
-      if type == "commit_comment"
-        commit_sha = params["comment"]["commit_id"]
-
-        ::Jobs.enqueue(
-          :code_review_sync_commit_comments,
-          repo_name: repo_name,
-          commit_sha: commit_sha,
-          repo_id: repo_id
-        )
+      if type == "issue_comment" && params["pull_request"].present?
+        type = "pull_request_comment"
       end
 
-      if type == "push"
-        ::Jobs.enqueue(:code_review_sync_commits, repo_name: repo_name, repo_id: repo_id)
+      if SiteSetting.code_review_commits_and_prs_enabled
+        if type == "commit_comment"
+          commit_sha = params["comment"]["commit_id"]
+
+          ::Jobs.enqueue(
+            :code_review_sync_commit_comments,
+            repo_name: repo_name,
+            commit_sha: commit_sha,
+            repo_id: repo_id
+          )
+        end
+
+        if type == "push"
+          ::Jobs.enqueue(:code_review_sync_commits, repo_name: repo_name, repo_id: repo_id)
+        end
+
+        if type == "commit_comment"
+          syncer = DiscourseCodeReview.github_pr_syncer
+          git_commit = params["comment"]["commit_id"]
+
+          syncer.sync_associated_pull_requests(repo_name, git_commit, repo_id: repo_id)
+        end
+
+        if ["pull_request", "pull_request_comment", "pull_request_review", "pull_request_review_comment"].include? type
+          syncer = DiscourseCodeReview.github_pr_syncer
+
+          issue_number =
+            params['number'] ||
+            (params['issue'] && params['issue']['number']) ||
+            (params['pull_request'] && params['pull_request']['number'])
+
+          syncer.sync_pull_request(repo_name, issue_number, repo_id: repo_id)
+        end
       end
 
-      if type == "commit_comment"
-        syncer = DiscourseCodeReview.github_pr_syncer
-        git_commit = params["comment"]["commit_id"]
+      if SiteSetting.code_review_issues_enabled
+        if ["issues", "issue_comment"].include?(type)
+          syncer = DiscourseCodeReview.github_issue_syncer
+          issue_number = params['issue'] && params['issue']['number']
 
-        syncer.sync_associated_pull_requests(repo_name, git_commit, repo_id: repo_id)
-      end
-
-      if ["pull_request", "issue_comment", "pull_request_review", "pull_request_review_comment"].include? type
-        syncer = DiscourseCodeReview.github_pr_syncer
-
-        issue_number =
-          params['number'] ||
-          (params['issue'] && params['issue']['number']) ||
-          (params['pull_request'] && params['pull_request']['number'])
-
-        syncer.sync_pull_request(repo_name, issue_number, repo_id: repo_id)
+          raise Discourse::InvalidAccess unless issue_number
+          syncer.sync_issue(repo_name, issue_number, repo_id: repo_id)
+        end
       end
 
       render plain: '"ok"'

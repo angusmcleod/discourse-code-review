@@ -23,6 +23,7 @@ register_svg_icon 'history'
 require_dependency 'auth/github_authenticator'
 require_dependency 'lib/staff_constraint'
 require File.expand_path("../lib/discourse_code_review/rake_tasks.rb", __FILE__)
+require File.expand_path("../lib/discourse_code_review/hooks.rb", __FILE__)
 
 module HackGithubAuthenticator
   def after_authenticate(auth_token, existing_account: nil)
@@ -91,9 +92,12 @@ after_initialize do
       @github_commit_querier = nil
       @github_pr_querier = nil
       @github_pr_service = nil
+      @github_issue_querier = nil
+      @github_issue_service = nil
       @github_user_querier = nil
       @github_user_syncer = nil
       @github_pr_syncer = nil
+      @github_issue_syncer = nil
     end
 
     def self.graphql_client
@@ -113,6 +117,15 @@ after_initialize do
         )
     end
 
+    def self.github_issue_service
+      @github_issue_querier ||= Source::GithubIssueQuerier.new(self.graphql_client)
+      @github_issue_service ||=
+        Source::GithubIssueService.new(
+          self.octokit_bot_client,
+          @github_issue_querier
+        )
+    end
+
     def self.github_user_querier
       @github_user_querier ||= Source::GithubUserQuerier.new(self.octokit_client)
     end
@@ -125,6 +138,14 @@ after_initialize do
       @github_pr_syncer ||=
         GithubPRSyncer.new(
           self.github_pr_service,
+          self.github_user_syncer
+        )
+    end
+
+    def self.github_issue_syncer
+      @github_issue_syncer ||=
+        GithubIssueSyncer.new(
+          self.github_issue_service,
           self.github_user_syncer
         )
     end
@@ -197,10 +218,13 @@ after_initialize do
   require File.expand_path("../lib/discourse_code_review/state.rb", __FILE__)
   require File.expand_path("../lib/discourse_code_review/github_pr_poster", __FILE__)
   require File.expand_path("../lib/discourse_code_review/github_pr_syncer", __FILE__)
+  require File.expand_path("../lib/discourse_code_review/github_issue_poster", __FILE__)
+  require File.expand_path("../lib/discourse_code_review/github_issue_syncer", __FILE__)
   require File.expand_path("../lib/discourse_code_review/github_user_syncer.rb", __FILE__)
   require File.expand_path("../lib/discourse_code_review/importer.rb", __FILE__)
   require File.expand_path("../lib/discourse_code_review/github_repo.rb", __FILE__)
 
+  register_category_custom_field_type(DiscourseCodeReview::State::GithubRepoCategories::GITHUB_ISSUES, :boolean)
   Site.preloaded_category_custom_fields << DiscourseCodeReview::State::GithubRepoCategories::GITHUB_REPO_NAME
 
   add_admin_route 'code_review.title', 'code-review'
@@ -250,10 +274,15 @@ after_initialize do
 
   on(:post_process_cooked) do |doc, post|
     if SiteSetting.code_review_sync_to_github?
-      client = DiscourseCodeReview.octokit_bot_client
-      DiscourseCodeReview.sync_post_to_github(client, post)
+      is_issue = post.topic.category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_ISSUES]
 
-      DiscourseCodeReview.github_pr_syncer.mirror_pr_post(post)
+      if is_issue && SiteSetting.code_review_issues_enabled
+        DiscourseCodeReview.github_issue_syncer.mirror_issue_post(post)
+      elsif SiteSetting.code_review_commits_and_prs_enabled
+        client = DiscourseCodeReview.octokit_bot_client
+        DiscourseCodeReview.sync_post_to_github(client, post)
+        DiscourseCodeReview.github_pr_syncer.mirror_pr_post(post)
+      end
     end
   end
 
@@ -266,15 +295,22 @@ after_initialize do
   end
 
   on(:post_destroyed) do |post, opts, user|
+    category = post&.topic&.category
+    repo_name = 
+      category && category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_REPO_NAME]
+    return unless category && repo_name.present?
+
     if (github_id = post.custom_fields[DiscourseCodeReview::GITHUB_ID]).present?
       client = DiscourseCodeReview.octokit_bot_client
-      category = post&.topic&.category
+      client.delete_commit_comment(repo_name, github_id)
+    end
 
-      repo_name =
-        category && category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_REPO_NAME]
+    if SiteSetting.code_review_issues_enabled
+      comment_number =
+        post.custom_fields[DiscourseCodeReview::GithubIssueSyncer::GITHUB_COMMENT_NUMBER]
 
-      if repo_name.present?
-        client.delete_commit_comment(repo_name, github_id)
+      if comment_number.present?
+        DiscourseCodeReview.github_issue_service.delete_issue_comment(repo_name, comment_number)
       end
     end
   end
