@@ -274,16 +274,17 @@ after_initialize do
 
   on(:post_process_cooked) do |doc, post|
     if SiteSetting.code_review_sync_to_github?
-      is_issue = post.topic.category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_ISSUES]
+      issue_category = post.topic.category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_ISSUES]
 
-      if is_issue && SiteSetting.code_review_issues_enabled
+      if SiteSetting.code_review_issues_enabled && issue_category
+        DiscourseCodeReview.github_issue_syncer.mirror_issue_topic(post)
         DiscourseCodeReview.github_issue_syncer.mirror_issue_post(post)
       elsif SiteSetting.code_review_commits_and_prs_enabled
         client = DiscourseCodeReview.octokit_bot_client
         DiscourseCodeReview.sync_post_to_github(client, post)
         DiscourseCodeReview.github_pr_syncer.mirror_pr_post(post)
       end
-    end
+    end 
   end
 
   on(:before_post_process_cooked) do |doc, post|
@@ -298,19 +299,20 @@ after_initialize do
     category = post&.topic&.category
     repo_name = 
       category && category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_REPO_NAME]
-    return unless category && repo_name.present?
 
-    if (github_id = post.custom_fields[DiscourseCodeReview::GITHUB_ID]).present?
-      client = DiscourseCodeReview.octokit_bot_client
-      client.delete_commit_comment(repo_name, github_id)
-    end
+    if category && repo_name.present?
+      if (github_id = post.custom_fields[DiscourseCodeReview::GITHUB_ID]).present?
+        client = DiscourseCodeReview.octokit_bot_client
+        client.delete_commit_comment(repo_name, github_id)
+      end
 
-    if SiteSetting.code_review_issues_enabled
-      comment_number =
-        post.custom_fields[DiscourseCodeReview::GithubIssueSyncer::GITHUB_COMMENT_NUMBER]
+      if SiteSetting.code_review_issues_enabled
+        comment_number =
+          post.custom_fields[DiscourseCodeReview::GithubIssueSyncer::GITHUB_COMMENT_NUMBER]
 
-      if comment_number.present?
-        DiscourseCodeReview.github_issue_service.delete_issue_comment(repo_name, comment_number)
+        if comment_number.present?
+          DiscourseCodeReview.github_issue_service.delete_issue_comment(repo_name, comment_number)
+        end
       end
     end
   end

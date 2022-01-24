@@ -83,14 +83,67 @@ module DiscourseCodeReview
             '',
             post.raw
           ].join("\n")
-          response = @issue_service.create_issue_comment(
-            repo_name,
-            issue_number,
-            github_post_contents
-          )
 
-          post.custom_fields[GITHUB_NODE_ID] = response[:node_id]
-          post.save_custom_fields
+          DistributedMutex.synchronize('code-review:ensure-post-with-nonce') do
+            response = @issue_service.create_issue_comment(
+              repo_name,
+              issue_number,
+              github_post_contents
+            )
+
+            if response[:node_id]
+              post.custom_fields[GITHUB_NODE_ID] = response[:node_id]
+              post.save_custom_fields
+            end
+          end
+        end
+      end
+    end
+
+    def mirror_issue_topic(post)
+      topic = post.topic
+      user = post.user
+
+      conditions = [
+        topic.regular?,
+        post.post_number == 1,
+        post.post_type == Post.types[:regular],
+        !post.topic.custom_fields[GITHUB_NODE_ID]
+      ]
+
+      if conditions.all?
+        repo_name = topic.category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_REPO_NAME]
+
+        if repo_name
+          title = topic.title
+          post = topic.first_post
+          body = post.raw
+
+          DistributedMutex.synchronize('code-review:ensure-topic-with-nonce') do
+            issue = issue_service.create_issue(repo_name, title, body)
+            issue_url = issue[:url]
+            issue_number = issue[:number].to_s
+            issue_node_id = issue[:node_id]
+            issue_created = [
+              issue_url,
+              issue_number,
+              issue_node_id
+            ].all?
+
+            if issue_created
+              changes = {
+                tags: [SiteSetting.code_review_issue_tag],
+                title: "#{title} (Issue ##{issue_number})",
+                raw: "#{body}\n\n[GitHub](#{issue_url})"
+              }
+              revisor = PostRevisor.new(post, topic)
+              revisor.revise!(user, changes, validate_post: false)
+
+              topic.custom_fields[GITHUB_NODE_ID] = issue_node_id
+              topic.custom_fields[GITHUB_ISSUE_NUMBER] = issue_number
+              topic.save_custom_fields
+            end
+          end
         end
       end
     end

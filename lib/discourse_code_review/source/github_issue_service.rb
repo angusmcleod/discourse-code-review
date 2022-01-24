@@ -83,6 +83,10 @@ module DiscourseCodeReview
       EventStream.new(issue_querier, issue)
     end
 
+    def create_issue(repo_name, title, body)
+      client.create_issue(repo_name, title, body)
+    end
+
     def create_issue_comment(repo_name, issue_number, body)
       client.add_comment(repo_name, issue_number, body)
     end
