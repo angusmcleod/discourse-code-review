@@ -35,7 +35,8 @@ module DiscourseCodeReview
       body: String,
       github_id: String,
       created_at: Time,
-      author: Actor
+      author: Actor,
+      state: String
     )
 
   class Source::GithubIssueService
@@ -93,6 +94,14 @@ module DiscourseCodeReview
 
     def delete_issue_comment(repo_name, comment_number)
       client.delete_comment(repo_name, comment_number)
+    end
+
+    def close_issue(repo_name, issue_number)
+      client.close_issue(repo_name, issue_number)
+    end
+
+    def reopen_issue(repo_name, issue_number)
+      client.reopen_issue(repo_name, issue_number)
     end
 
     private

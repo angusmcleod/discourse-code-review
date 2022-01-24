@@ -126,7 +126,8 @@ module DiscourseCodeReview
                 },
                 body,
                 title,
-                createdAt
+                createdAt,
+                state
               }
             }
           }
@@ -138,7 +139,8 @@ module DiscourseCodeReview
         body: data[:body],
         title: data[:title],
         created_at: Time.parse(data[:createdAt]),
-        github_id: data[:id]
+        github_id: data[:id],
+        state: data[:state]
       )
     end
 

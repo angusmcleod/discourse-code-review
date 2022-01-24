@@ -317,6 +317,16 @@ after_initialize do
     end
   end
 
+  on(:topic_status_updated) do |topic, status, enabled|
+    if SiteSetting.code_review_sync_to_github?
+      issue_category = topic.category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_ISSUES]
+
+      if SiteSetting.code_review_issues_enabled && issue_category && status == "closed"
+        DiscourseCodeReview.github_issue_syncer.mirror_issue_state(topic, status, enabled)
+      end
+    end
+  end
+
   require_dependency 'list_controller'
   class ::ListController
     skip_before_action :ensure_logged_in, only: %i[approval_given approval_pending]

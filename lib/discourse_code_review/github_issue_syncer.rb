@@ -148,6 +148,32 @@ module DiscourseCodeReview
       end
     end
 
+    def mirror_issue_state(topic, status, enabled)
+      repo_name = topic.category.custom_fields[DiscourseCodeReview::State::GithubRepoCategories::GITHUB_REPO_NAME]
+      issue_number = topic.custom_fields[GITHUB_ISSUE_NUMBER]
+      owner, name = repo_name.split('/', 2)
+
+      issue =
+        Issue.new(
+          owner: owner,
+          name: name,
+          issue_number: issue_number.to_i
+        )
+      issue_data = issue_service.issue_data(issue)
+
+      DistributedMutex.synchronize('code-review:ensure-post-with-nonce') do
+        topic_state = (status == "closed" && enabled) ? "closed" : "open"
+
+        if issue_data.state == "OPEN" && topic_state == "closed"
+          issue_service.close_issue(repo_name, issue_number)
+        end
+
+        if issue_data.state == "CLOSED" && topic_state == "open"
+          issue_service.reopen_issue(repo_name, issue_number)
+        end
+      end
+    end
+
     private
 
     attr_reader :issue_service
