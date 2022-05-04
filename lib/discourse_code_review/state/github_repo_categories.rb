@@ -1,44 +1,29 @@
 # frozen_string_literal: true
 
-module DiscourseCodeReview::State::GithubRepoCategories
-  GITHUB_REPO_ID = "GitHub Repo ID"
-  GITHUB_REPO_NAME = "GitHub Repo Name"
-  GITHUB_ISSUES = "Issues"
+module DiscourseCodeReview
+  module State::GithubRepoCategories
+    GITHUB_REPO_ID = "GitHub Repo ID"
+    GITHUB_REPO_NAME = "GitHub Repo Name"
+    GITHUB_ISSUES = "Issues"
 
-  class << self
-    def ensure_category(repo_name:, repo_id: nil, issues: false)
-      Category.transaction(requires_new: true) do
-        category =
-          scoped_categories(issues: issues).where(
-            id:
-              CategoryCustomField
-                .select(:category_id)
-                .where(name: GITHUB_REPO_NAME, value: repo_name)
-          ).first
+    class << self
+      def ensure_category(repo_name:, repo_id: nil, issues: false)
+        ActiveRecord::Base.transaction(requires_new: true) do
+          repo_category =
+            GithubRepoCategory
+              .find_by(repo_id: repo_id)
 
-        if category.present? && category.custom_fields[GITHUB_REPO_ID].blank? && repo_id.present?
-          category.custom_fields[GITHUB_REPO_ID] = repo_id
-          category.save_custom_fields
-        end
+          repo_category ||=
+            GithubRepoCategory
+              .find_by(name: repo_name)
 
-        # search for category via repo_id
-        if category.blank? && repo_id.present?
-          category =
-            scoped_categories(issues: issues).where(
-              id:
-                CategoryCustomField
-                  .select(:category_id)
-                .where(name: GITHUB_REPO_ID, value: repo_id)
-            ).first
+          category = repo_category&.category
 
-          if category.present?
-            # update repository name in category custom field
-            category.custom_fields[GITHUB_REPO_NAME] = repo_name
-            category.save_custom_fields
-          else
+          if !category && repo_id.present?
             # create new category
-            short_name = find_category_name(repo_name, repo_id, issues)
             description_key = issues ? "issues_category_description" : "category_description"
+            short_name = find_category_name(repo_name, repo_id, issues)
+
             category = Category.new(
               name: short_name,
               user: Discourse.system_user,
@@ -56,33 +41,38 @@ module DiscourseCodeReview::State::GithubRepoCategories
               SiteSetting.default_categories_muted = (existing_category_ids << category.id).join("|")
             end
 
+            repo_category = GithubRepoCategory.new(category_id: category.id)
+          end
+
+          if category
+            repo_category.repo_id = repo_id
+            repo_category.name = repo_name
+            repo_category.save! if repo_category.changed?
+
             category.custom_fields[GITHUB_REPO_ID] = repo_id
             category.custom_fields[GITHUB_REPO_NAME] = repo_name
             category.custom_fields[GITHUB_ISSUES] = issues
             category.save_custom_fields
           end
+
+          category
         end
-
-        category
       end
-    end
 
-    def each_repo_name(&blk)
-      CategoryCustomField
-        .where(name: GITHUB_REPO_NAME)
-        .pluck(:value)
-        .each(&blk)
-    end
+      def each_repo_name(&blk)
+        GithubRepoCategory
+          .pluck(:name)
+          .each(&blk)
+      end
 
-    def github_repo_category_fields
-      CategoryCustomField
-        .where(name: GITHUB_REPO_NAME)
-        .include(:category)
-    end
+      def get_repo_name_from_topic(topic)
+        GithubRepoCategory
+          .where(category_id: topic.category_id)
+          .first
+          &.name
+      end
 
-    def get_repo_name_from_topic(topic)
-      topic.category.custom_fields[GITHUB_REPO_NAME]
-    end
+      private
 
     def get_parent_category_id(repo_name, repo_id, issues)
       parent_category_id = DiscourseCodeReview::Hooks.apply_parent_category_finder(repo_name, repo_id, issues)
