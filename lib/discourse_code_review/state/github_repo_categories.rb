@@ -74,37 +74,38 @@ module DiscourseCodeReview
 
       private
 
-    def get_parent_category_id(repo_name, repo_id, issues)
-      parent_category_id = DiscourseCodeReview::Hooks.apply_parent_category_finder(repo_name, repo_id, issues)
+      def get_parent_category_id(repo_name, repo_id, issues)
+        parent_category_id = DiscourseCodeReview::Hooks.apply_parent_category_finder(repo_name, repo_id, issues)
 
-      if !parent_category_id && SiteSetting.code_review_default_parent_category.present?
-        parent_category_id = SiteSetting.code_review_default_parent_category.to_i
+        if !parent_category_id && SiteSetting.code_review_default_parent_category.present?
+          parent_category_id = SiteSetting.code_review_default_parent_category.to_i
+        end
+
+        parent_category_id
       end
 
-      parent_category_id
-    end
+      private
 
-    private
+      def find_category_name(repo_name, repo_id, issues)
+        name = DiscourseCodeReview::Hooks.apply_category_namer(repo_name, repo_id, issues)
+        return name if name.present?
 
-    def find_category_name(repo_name, repo_id, issues)
-      name = DiscourseCodeReview::Hooks.apply_category_namer(repo_name, repo_id, issues)
-      return name if name.present?
+        name = repo_name.split("/", 2).last
+        name += "-issues" if issues
 
-      name = repo_name.split("/", 2).last
-      name += "-issues" if issues
-
-      if Category.where(name: name).exists?
-        name += SecureRandom.hex
-      else
-        name
+        if Category.where(name: name).exists?
+          name += SecureRandom.hex
+        else
+          name
+        end
       end
-    end
 
-    def scoped_categories(issues: false)
-      if issues
-        Category.where("id IN (SELECT category_id FROM category_custom_fields WHERE name = '#{GITHUB_ISSUES}' and value::boolean IS TRUE)")
-      else
-        Category
+      def scoped_categories(issues: false)
+        if issues
+          Category.where("id IN (SELECT category_id FROM category_custom_fields WHERE name = '#{GITHUB_ISSUES}' and value::boolean IS TRUE)")
+        else
+          Category
+        end
       end
     end
   end
